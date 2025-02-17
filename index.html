@@ -52,8 +52,8 @@
             <input type="number" id="upperTaxonKey" value="212">
         </label>
         <label>
-            Minimum count (default <strong>10/strong>):
-                <input type="number" id="minCount" value="10">
+            Minimum count (default <strong>10</strong>):
+            <input type="number" id="minCount" value="10">
         </label>
         <p>
             (This tool uses GBIF property <strong>P846</strong> to map GBIF taxon keys to Wikidata,
@@ -69,6 +69,11 @@
 
     <textarea id="output" placeholder="QuickStatements output will appear here..."></textarea>
 
+    <footer>
+        <p>By <a href="https://www.wikidata.org/wiki/User:TiagoLubiana">TiagoLubiana</a>; code open on <a
+                href="https://github.com/lubianat/gbif_range_to_wikidata"> GitHub</a>.
+
+    </footer>
     <script>
         // Utility: chunk an array into pieces of a given size
         function chunkArray(array, chunkSize) {

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Taxon Range QuickStatements Generator (Batch Mode)</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 2em;
+        }
+
+        label {
+            display: block;
+            margin-top: 1em;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+            width: 300px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 300px;
+            margin-top: 1em;
+        }
+
+        #loading {
+            font-weight: bold;
+            color: red;
+            margin-top: 1em;
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Taxon Range QuickStatements Generator (Batch Mode)</h1>
+    <p>Enter parameters and click "Generate QuickStatements".</p>
+    <form id="qsForm">
+        <label>
+            Range name (for GBIF query, e.g., <strong>africa</strong>):
+            <input type="text" id="rangeName" value="africa">
+        </label>
+        <label>
+            Wikidata QID for the range (e.g., <strong>Q15</strong> for Africa):
+            <input type="text" id="rangeQID" value="Q15">
+        </label>
+        <label>
+            Upper taxonKey (default <strong>212</strong> for birds):
+            <input type="number" id="upperTaxonKey" value="212">
+        </label>
+        <label>
+            Minimum count (default <strong>10/strong>):
+                <input type="number" id="minCount" value="10">
+        </label>
+        <p>
+            (This tool uses GBIF property <strong>P846</strong> to map GBIF taxon keys to Wikidata,
+            creates taxon range QuickStatements using property <strong>P9714</strong>,
+            and adds references:
+            <strong>S854</strong> for the source URL,
+            <strong>S248</strong> with value <strong>Q1531570</strong> (GBIF).)
+        </p>
+        <button type="submit">Generate QuickStatements</button>
+    </form>
+
+    <div id="loading">Loading... please wait</div>
+
+    <textarea id="output" placeholder="QuickStatements output will appear here..."></textarea>
+
+    <script>
+        // Utility: chunk an array into pieces of a given size
+        function chunkArray(array, chunkSize) {
+            const chunks = [];
+            for (let i = 0; i < array.length; i += chunkSize) {
+                chunks.push(array.slice(i, i + chunkSize));
+            }
+            return chunks;
+        }
+
+        // Fetch Wikidata mappings for a batch of GBIF keys
+        async function fetchMappingForBatch(gbifKeysBatch) {
+            const valuesClause = gbifKeysBatch.map(key => `"${key}"`).join(" ");
+            const sparqlQuery = `
+        SELECT ?taxon ?gbifKey WHERE {
+          VALUES ?gbifKey { ${valuesClause} }.
+          ?taxon wdt:P846 ?gbifKey.
+        }
+      `;
+            const sparqlURL = "https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparqlQuery);
+            const response = await fetch(sparqlURL, { mode: 'cors' });
+            const data = await response.json();
+            const batchMapping = {};
+            data.results.bindings.forEach(binding => {
+                const qid = binding.taxon.value.split("/").pop();
+                const gbifKey = binding.gbifKey.value;
+                batchMapping[gbifKey] = qid;
+            });
+            return batchMapping;
+        }
+
+        // Format today's date in QuickStatements date format: +YYYY-MM-DDT00:00:00Z/11
+        function getQuickStatementsDate() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            return `+${year}-${month}-${day}T00:00:00Z/11`;
+        }
+
+        document.getElementById("qsForm").addEventListener("submit", async function (e) {
+            e.preventDefault();
+
+            // Show loading indicator
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("output").value = "";
+
+            const rangeName = document.getElementById("rangeName").value.trim();
+            const rangeQID = document.getElementById("rangeQID").value.trim();
+            const upperTaxonKey = document.getElementById("upperTaxonKey").value.trim();
+            const minCount = document.getElementById("minCount").value.trim();
+
+            // Build the GBIF API URL using facet parameters
+            const gbifURL = `https://api.gbif.org/v1/occurrence/search?taxonKey=${upperTaxonKey}&continent=${encodeURIComponent(rangeName)}&limit=0&facet=speciesKey&facetMincount=${minCount}&facetLimit=5000`;
+
+            let gbifData;
+            try {
+                const response = await fetch(gbifURL);
+                gbifData = await response.json();
+            } catch (error) {
+                alert("Error fetching from GBIF API: " + error);
+                document.getElementById("loading").style.display = "none";
+                return;
+            }
+
+            if (!gbifData.facets || gbifData.facets.length === 0) {
+                alert("No facets found in the GBIF API result.");
+                document.getElementById("loading").style.display = "none";
+                return;
+            }
+
+            const counts = gbifData.facets[0].counts;
+            if (!counts || counts.length === 0) {
+                alert("No species found meeting the criteria.");
+                document.getElementById("loading").style.display = "none";
+                return;
+            }
+
+            // Extract GBIF species keys as strings
+            const gbifKeys = counts.map(item => item.name);
+
+            // Process the keys in batches of 400 for querying Wikidata
+            const batchSize = 400;
+            const batches = chunkArray(gbifKeys, batchSize);
+            let mapping = {};  // Combined mapping from GBIF key to Wikidata QID
+
+            for (let i = 0; i < batches.length; i++) {
+                try {
+                    const batchMapping = await fetchMappingForBatch(batches[i]);
+                    mapping = Object.assign(mapping, batchMapping);
+                } catch (error) {
+                    console.error("Error processing batch " + i + ": " + error);
+                }
+            }
+
+            // Prepare retrieval date in QuickStatements format
+            const retrievalDate = getQuickStatementsDate();
+
+            // Generate QuickStatements lines.
+            // Format: <Wikidata QID>  TAB  P9714  TAB  <Range QID>  TAB  S854  TAB  "<GBIF API URL>"  TAB  S248  TAB  Q1531570  TAB  S813  TAB  <retrieval date>
+            const qsProperty = "P9714"; // Taxon range
+            const refUrlProp = "S854";
+            const refStatedInProp = "S248";
+            const statedInValue = "Q1531570"; // GBIF
+            const refDateProp = "S813";
+
+            let qsLines = "";
+            gbifKeys.forEach(key => {
+                let speciesGbifURL = `https://www.gbif.org/species/${key}`;
+                if (mapping[key]) {
+                    const wdQID = mapping[key];
+                    qsLines += `${wdQID}\t${qsProperty}\t${rangeQID}\t${refUrlProp}\t"${speciesGbifURL}"\t${refStatedInProp}\t${statedInValue}\n`;
+                } else {
+                    qsLines += `# No Wikidata mapping found for GBIF key ${key}\n`;
+                }
+            });
+
+            document.getElementById("output").value = qsLines;
+            // Hide loading indicator
+            document.getElementById("loading").style.display = "none";
+        });
+    </script>
+</body>
+
+</html>

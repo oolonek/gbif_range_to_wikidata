@@ -80,6 +80,12 @@
     </div>
     <div id="status"></div>
     <textarea id="output" placeholder="QuickStatements output will appear here..."></textarea>
+
+    <footer>
+        <p>By <a href="https://www.wikidata.org/wiki/User:TiagoLubiana">TiagoLubiana</a>; code open on <a
+                href="https://github.com/lubianat/gbif_range_to_wikidata"> GitHub</a>.
+
+    </footer>
     <script>
         async function fetchRegionInfo(regionName) {
             const sparqlQuery = `
@@ -140,6 +146,17 @@
             }
             return mapping;
         }
+
+
+        // Format today's date in QuickStatements date format: +YYYY-MM-DDT00:00:00Z/11
+        function getQuickStatementsDate() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            return `+${year}-${month}-${day}T00:00:00Z/11`;
+        }
+        
         // Update the form submit handler
         document.getElementById("qsForm").addEventListener("submit", async function (e) {
             e.preventDefault();

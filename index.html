@@ -90,7 +90,7 @@
         async function fetchRegionInfo(regionName) {
             const sparqlQuery = `
                 SELECT ?region ?regionLabel ?isoCode WHERE {
-                    { ?region wdt:P31 wd:Q5107. } UNION { ?region wdt:P31 wd:Q6256. }
+                    { ?region wdt:P31 wd:Q5107. } UNION { ?region wdt:P31 wd:Q6256. } UNION { ?region wdt:P31 wd:Q161243. }
                     ?region rdfs:label ?regionLabel.
                     FILTER(LANG(?regionLabel) = "en").
                     OPTIONAL { ?region wdt:P297 ?isoCode. }
@@ -156,7 +156,7 @@
             const day = String(now.getDate()).padStart(2, '0');
             return `+${year}-${month}-${day}T00:00:00Z/11`;
         }
-        
+
         // Update the form submit handler
         document.getElementById("qsForm").addEventListener("submit", async function (e) {
             e.preventDefault();

@@ -261,13 +261,31 @@
             return [counts.map(item => item.name), counts.length];
         }
 
-        // Separate QuickStatements generation
+
         function generateQuickStatements(gbifKeys, qidMapping, regionInfo) {
             const regionQID = regionInfo.region.value.split("/").pop();
-            return gbifKeys.map(key => {
-                const wikidataQID = qidMapping[key] || "Q???";
-                return `${wikidataQID}\tP9714\t${regionQID}\tS854\t"https://www.gbif.org/species/${key}"\tS248\tQ1531570`;
-            }).join("\n");
+            const { mapped, unmapped } = gbifKeys.reduce((acc, key) => {
+                if (qidMapping[key]) {
+                    acc.mapped.push(key);
+                } else {
+                    acc.unmapped.push(key);
+                }
+                return acc;
+            }, { mapped: [], unmapped: [] });
+
+            // Create main QuickStatements
+            const qsLines = mapped.map(key =>
+                `${qidMapping[key]}\tP9714\t${regionQID}\tS854\t"https://www.gbif.org/species/${key}"\tS248\tQ1531570`
+            ).join("\n");
+
+            // Add unmapped species as comments
+            const unmappedSection = unmapped.length > 0 ?
+                `\n\n# Species with no mapping in Wikidata:\n${unmapped.map(key =>
+                    `# ${key} - https://www.gbif.org/species/${key}`
+                ).join("\n")}` :
+                "";
+
+            return qsLines + unmappedSection;
         }
     </script>
 </body>

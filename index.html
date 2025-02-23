@@ -1,16 +1,61 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <title>Taxon Range QuickStatements Generator (Batch Mode)</title>
     <style>
-        body { font-family: sans-serif; margin: 2em; }
-        label { display: block; margin-top: 1em; }
-        input[type="text"], input[type="number"] { width: 300px; }
-        textarea { width: 100%; height: 300px; margin-top: 1em; }
-        #loading { font-weight: bold; color: red; margin-top: 1em; display: none; }
+        body {
+            font-family: sans-serif;
+            margin: 2em;
+        }
+
+        label {
+            display: block;
+            margin-top: 1em;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+            width: 300px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 300px;
+            margin-top: 1em;
+        }
+
+        #loading {
+            font-weight: bold;
+            color: red;
+            margin-top: 1em;
+            display: none;
+        }
+
+        #progressContainer {
+            width: 100%;
+            height: 20px;
+            background-color: #f1f1f1;
+            margin: 10px 0;
+            display: none;
+        }
+
+        #progressBar {
+            width: 0%;
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+        }
+
+        #status {
+            margin: 10px 0;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
     </style>
 </head>
+
 <body>
     <h1>Taxon Range QuickStatements Generator (Batch Mode)</h1>
     <p>Enter parameters and click "Generate QuickStatements".</p>
@@ -30,6 +75,10 @@
         <button type="submit">Generate QuickStatements</button>
     </form>
     <div id="loading">Loading... please wait</div>
+    <div id="progressContainer">
+        <div id="progressBar"></div>
+    </div>
+    <div id="status"></div>
     <textarea id="output" placeholder="QuickStatements output will appear here..."></textarea>
     <script>
         async function fetchRegionInfo(regionName) {
@@ -75,7 +124,7 @@
                         VALUES ?gbifKey { ${valuesClause} }
                         ?taxon wdt:P846 ?gbifKey.
                     }`;
-                
+
                 try {
                     const sparqlURL = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparqlQuery)}`;
                     const response = await fetch(sparqlURL);
@@ -91,55 +140,136 @@
             }
             return mapping;
         }
-
+        // Update the form submit handler
         document.getElementById("qsForm").addEventListener("submit", async function (e) {
             e.preventDefault();
+            const startTime = Date.now();
+
+            // Reset UI elements
             document.getElementById("loading").style.display = "block";
+            document.getElementById("progressContainer").style.display = "block";
             document.getElementById("output").value = "";
-            
-            const regionName = document.getElementById("regionName").value.trim();
-            const upperTaxonKey = document.getElementById("upperTaxonKey").value.trim();
-            const minCount = document.getElementById("minCount").value.trim();
-            
-            const regionInfo = await fetchRegionInfo(regionName);
-            if (!regionInfo) {
-                alert("Region not found in Wikidata.");
-                document.getElementById("loading").style.display = "none";
-                return;
+            document.getElementById("status").textContent = "";
+
+            // Helper function to update status
+            function updateStatus(message, append = true) {
+                const statusEl = document.getElementById("status");
+                statusEl.textContent = append ?
+                    `${statusEl.textContent}\n${new Date().toLocaleTimeString()}: ${message}` :
+                    message;
             }
-            
-            const regionQID = regionInfo.region.value.split("/").pop();
-            const isoCode = regionInfo.isoCode ? regionInfo.isoCode.value : null;
-            const isCountry = isoCode !== null;
-            
-            let gbifURL = `https://api.gbif.org/v1/occurrence/search?taxonKey=${upperTaxonKey}&limit=0&facet=speciesKey&facetMincount=${minCount}&facetLimit=5000`;
-            gbifURL += isCountry ? `&country=${isoCode}` : `&continent=${encodeURIComponent(regionName)}`;
-            
+
+            // Helper function to update progress
+            function updateProgress(percentage) {
+                document.getElementById("progressBar").style.width = `${percentage}%`;
+            }
+
             try {
-                const response = await fetch(gbifURL);
-                const gbifData = await response.json();
-                const counts = gbifData.facets?.[0]?.counts || [];
-                if (counts.length === 0) {
-                    alert("No species found meeting the criteria.");
-                    document.getElementById("loading").style.display = "none";
-                    return;
-                }
-                
-                const gbifKeys = counts.map(item => item.name);
-                const qidMapping = await fetchWikidataQIDs(gbifKeys);
-                
-                let qsLines = gbifKeys.map(key => {
-                    const wikidataQID = qidMapping[key] || "Q???";
-                    return `${wikidataQID}\tP9714\t${regionQID}\tS854\t"https://www.gbif.org/species/${key}"\tS248\tQ1531570`;
-                }).join("\n");
-                
+                // Get form values
+                const regionName = document.getElementById("regionName").value.trim();
+                const upperTaxonKey = document.getElementById("upperTaxonKey").value.trim();
+                const minCount = document.getElementById("minCount").value.trim();
+
+                // Step 1: Fetch region info
+                updateStatus("① Fetching region information from Wikidata...", false);
+                const regionInfo = await fetchRegionInfo(regionName);
+                if (!regionInfo) throw new Error("Region not found in Wikidata");
+
+                // Step 2: Get GBIF data
+                updateStatus("② Querying GBIF API for species occurrences...");
+                const [gbifKeys, totalCount] = await fetchGBIFData(regionInfo, upperTaxonKey, minCount);
+                updateStatus(`Found ${totalCount} species matching criteria`);
+
+                // Step 3: Fetch Wikidata mappings
+                updateStatus("③ Mapping GBIF keys to Wikidata items...");
+                const qidMapping = await fetchWikidataQIDsWithProgress(gbifKeys, updateProgress, updateStatus);
+
+                // Step 4: Generate output
+                updateStatus("④ Generating QuickStatements...");
+                const qsLines = generateQuickStatements(gbifKeys, qidMapping, regionInfo);
                 document.getElementById("output").value = qsLines;
+
+                updateStatus(`✅ Completed in ${((Date.now() - startTime) / 1000).toFixed(1)} seconds`);
             } catch (error) {
-                alert("Error fetching from GBIF API: " + error);
+                updateStatus(`❌ Error: ${error.message}`);
+                console.error(error);
+            } finally {
+                document.getElementById("loading").style.display = "none";
+                document.getElementById("progressContainer").style.display = "none";
+                updateProgress(0); // Reset progress bar
             }
-            
-            document.getElementById("loading").style.display = "none";
         });
+
+        // Modified fetch function with progress reporting
+        async function fetchWikidataQIDsWithProgress(gbifKeys, progressCallback, statusCallback) {
+            const chunkSize = 300;
+            const chunks = chunkArray(gbifKeys, chunkSize);
+            const mapping = {};
+
+            statusCallback(`Processing ${gbifKeys.length} keys in ${chunks.length} chunks`);
+
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                statusCallback(`Processing chunk ${i + 1}/${chunks.length} (${chunk.length} keys)`);
+
+                const valuesClause = chunk.map(key => `"${key}"`).join(" ");
+                const sparqlQuery = `SELECT ?taxon ?gbifKey WHERE {
+                VALUES ?gbifKey { ${valuesClause} }
+                ?taxon wdt:P846 ?gbifKey
+            }`;
+
+                try {
+                    const response = await fetch(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparqlQuery)}`);
+                    const data = await response.json();
+                    data.results.bindings.forEach(binding => {
+                        const qid = binding.taxon.value.split("/").pop();
+                        mapping[binding.gbifKey.value] = qid;
+                    });
+                } catch (error) {
+                    console.error(`Error in chunk ${i + 1}:`, error);
+                    statusCallback(`⚠️ Partial failure in chunk ${i + 1}, continuing...`);
+                }
+
+                // Update progress
+                const percentComplete = ((i + 1) / chunks.length) * 100;
+                progressCallback(percentComplete);
+
+                // Add slight delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            return mapping;
+        }
+
+        // Separate GBIF data fetching
+        async function fetchGBIFData(regionInfo, upperTaxonKey, minCount) {
+            const regionQID = regionInfo.region.value.split("/").pop();
+            const isoCode = regionInfo.isoCode?.value;
+            const isCountry = !!isoCode;
+
+            const gbifURL = `https://api.gbif.org/v1/occurrence/search?taxonKey=${upperTaxonKey}&limit=0` +
+                `&facet=speciesKey&facetMincount=${minCount}&facetLimit=5000` +
+                (isCountry ? `&country=${isoCode}` : `&continent=${encodeURIComponent(regionInfo.regionLabel.value)}`);
+
+            const response = await fetch(gbifURL);
+            const gbifData = await response.json();
+
+            if (!gbifData.facets?.[0]?.counts) {
+                throw new Error("No species found meeting the criteria");
+            }
+
+            const counts = gbifData.facets[0].counts;
+            return [counts.map(item => item.name), counts.length];
+        }
+
+        // Separate QuickStatements generation
+        function generateQuickStatements(gbifKeys, qidMapping, regionInfo) {
+            const regionQID = regionInfo.region.value.split("/").pop();
+            return gbifKeys.map(key => {
+                const wikidataQID = qidMapping[key] || "Q???";
+                return `${wikidataQID}\tP9714\t${regionQID}\tS854\t"https://www.gbif.org/species/${key}"\tS248\tQ1531570`;
+            }).join("\n");
+        }
     </script>
 </body>
+
 </html>
